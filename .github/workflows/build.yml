@@ -1,0 +1,62 @@
+name: Build ZMK Firmware
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "config/**"
+      - ".github/workflows/**"
+
+jobs:
+  build-nice-nano:
+    runs-on: ubuntu-22.04
+    steps:
+      # 1. 安装所有编译依赖
+      - name: Install Full Dependencies
+        run: |
+          sudo apt update && sudo apt install -y python3-pip ninja-build gperf ccache dfu-util device-tree-compiler wget git make gcc gcc-multilib g++ g++-multilib libsdl2-dev libmagic1
+          pip3 install west
+
+      # 2. 清空旧目录（避免缓存干扰）
+      - name: Clean Old Workspace
+        run: |
+          rm -rf zmk-workspace .west build
+
+      # 3. 初始化 West 工作区（修复分支错误）
+      - name: Init West Workspace (Fix Branch)
+        run: |
+          mkdir -p zmk-workspace && cd zmk-workspace
+          # 拉取官方main分支（唯一活跃分支）
+          west init -m https://github.com/zmkfirmware/zmk --mr main
+          west update
+          # 切换到稳定tag v0.7.5
+          cd zmk
+          git checkout v0.7.5
+          cd ..
+          west zephyr-export
+
+      # 4. 替换官方配置为自定义配置
+      - name: Replace with Custom Config
+        run: |
+          rm -rf zmk-workspace/config
+          cp -r ./config zmk-workspace/
+
+      # 5. 编译固件
+      - name: Build Firmware
+        run: |
+          cd zmk-workspace
+          west build -s app -b nice_nano_v2 -- -DZMK_CONFIG=./config
+
+      # 6. 提取固件
+      - name: Extract UF2 File
+        run: |
+          mkdir -p firmware
+          cp zmk-workspace/build/zephyr/zmk.uf2 firmware/nice_nano_v2-zmk.uf2
+          ls -l firmware/
+
+      # 7. 上传固件（新版插件）
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nice_nano_v2-firmware
+          path: firmware/
+          retention-days: 90
