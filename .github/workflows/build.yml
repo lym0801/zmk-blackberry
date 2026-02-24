@@ -10,51 +10,64 @@ jobs:
   build-nice-nano:
     runs-on: ubuntu-22.04
     steps:
-      # 1. 安装所有编译依赖
-      - name: Install Full Dependencies
+      # 1. 安装所有编译依赖（确保完整）
+      - name: Install All Dependencies
         run: |
-          sudo apt update && sudo apt install -y python3-pip ninja-build gperf ccache dfu-util device-tree-compiler wget git make gcc gcc-multilib g++ g++-multilib libsdl2-dev libmagic1
-          pip3 install west
+          sudo apt update && sudo apt install -y \
+            python3-pip python3-setuptools ninja-build gperf ccache dfu-util \
+            device-tree-compiler wget git make gcc gcc-multilib g++ g++-multilib \
+            libsdl2-dev libmagic1 zip unzip
+          pip3 install west==1.0.0  # 固定west版本，避免兼容性问题
 
-      # 2. 清空旧目录（避免缓存干扰）
-      - name: Clean Old Workspace
+      # 2. 清空旧文件（彻底清理缓存）
+      - name: Clean All Old Files
         run: |
-          rm -rf zmk-workspace .west build
+          rm -rf zmk-workspace .west build zmk zephyr modules tools bootloader
 
-      # 3. 初始化 West 工作区（修复分支错误）
-      - name: Init West Workspace (Fix Branch)
+      # 3. 直接克隆完整的ZMK工程（绕开west init的manifest坑）
+      - name: Clone Full ZMK Project
         run: |
-          mkdir -p zmk-workspace && cd zmk-workspace
-          # 拉取官方main分支（唯一活跃分支）
-          west init -m https://github.com/zmkfirmware/zmk --mr main
+          # 克隆ZMK主工程（包含完整的west.yml）
+          git clone --depth 1 --branch v0.7.5 https://github.com/zmkfirmware/zmk zmk-workspace
+          cd zmk-workspace
+          # 初始化west（使用工程内自带的west.yml）
+          west init -l app/
+          # 更新所有依赖（zephyr内核等）
           west update
-          # 切换到稳定tag v0.7.5
-          cd zmk
-          git checkout v0.7.5
-          cd ..
+          # 导出zephyr路径
           west zephyr-export
 
-      # 4. 替换官方配置为自定义配置
+      # 4. 替换为你的黑莓P9981配置
       - name: Replace with Custom Config
         run: |
+          # 删除官方默认配置
           rm -rf zmk-workspace/config
+          # 复制你的自定义配置到ZMK工程
           cp -r ./config zmk-workspace/
 
-      # 5. 编译固件
-      - name: Build Firmware
+      # 5. 编译固件（指定正确的配置路径）
+      - name: Build Firmware (No Manifest Error)
         run: |
           cd zmk-workspace
-          west build -s app -b nice_nano_v2 -- -DZMK_CONFIG=./config
+          west build -s app -b nice_nano_v2 -- -DZMK_CONFIG=${{ github.workspace }}/config
 
-      # 6. 提取固件
+      # 6. 提取并验证固件文件
       - name: Extract UF2 File
         run: |
           mkdir -p firmware
-          cp zmk-workspace/build/zephyr/zmk.uf2 firmware/nice_nano_v2-zmk.uf2
-          ls -l firmware/
+          # 确认固件存在后复制
+          if [ -f zmk-workspace/build/zephyr/zmk.uf2 ]; then
+              cp zmk-workspace/build/zephyr/zmk.uf2 firmware/nice_nano_v2-zmk.uf2
+              echo "✅ 固件生成成功！"
+              ls -l firmware/
+          else
+              echo "❌ 固件文件未找到！"
+              ls -l zmk-workspace/build/zephyr/
+              exit 1
+          fi
 
-      # 7. 上传固件（新版插件）
-      - name: Upload Firmware Artifact
+      # 7. 上传固件（新版插件，无废弃报错）
+      - name: Upload Firmware
         uses: actions/upload-artifact@v4
         with:
           name: nice_nano_v2-firmware
